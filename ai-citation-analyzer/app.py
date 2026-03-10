@@ -20,7 +20,7 @@ st.set_page_config(
 
 
 # ---------------------------------------------------
-# MODERN UI STYLE
+# CLEAN UI STYLE
 # ---------------------------------------------------
 
 st.markdown("""
@@ -33,12 +33,12 @@ st.markdown("""
 /* result cards */
 
 .result-card{
-    padding:24px;
-    border-radius:14px;
+    padding:22px;
+    border-radius:12px;
     background:#ffffff;
     border:1px solid #e5e7eb;
-    box-shadow:0 6px 18px rgba(0,0,0,0.06);
-    margin-bottom:20px;
+    box-shadow:0 5px 16px rgba(0,0,0,0.06);
+    margin-bottom:18px;
 }
 
 /* headings */
@@ -74,13 +74,14 @@ st.markdown("""
     font-size:13px;
 }
 
+/* highlight matched words */
+
 strong{
     color:#2563eb;
 }
 
 </style>
 """, unsafe_allow_html=True)
-
 
 
 # ---------------------------------------------------
@@ -91,7 +92,7 @@ st.title("🔎 AI Citation Analyzer")
 
 st.markdown(
 """
-Detect which **web sources influenced an AI answer** using **semantic similarity analysis**.
+Identify which **web sources likely influenced an AI-generated answer** using **semantic similarity analysis**.
 """
 )
 
@@ -137,12 +138,12 @@ model = load_model()
 
 
 # ---------------------------------------------------
-# WORD HIGHLIGHT
+# WORD HIGHLIGHT FUNCTION
 # ---------------------------------------------------
 
 def highlight_overlap(ai_sentence, source_sentence):
 
-    ai_words = set(re.findall(r'\w+', ai_sentence.lower()))
+    ai_words = set(re.findall(r'\b[a-zA-Z]{4,}\b', ai_sentence.lower()))
 
     highlighted = []
 
@@ -151,7 +152,7 @@ def highlight_overlap(ai_sentence, source_sentence):
         clean = re.sub(r'\W+', '', word.lower())
 
         if clean in ai_words:
-            highlighted.append(f"**{word}**")
+            highlighted.append(f"<strong>{word}</strong>")
         else:
             highlighted.append(word)
 
@@ -230,9 +231,8 @@ if analyze:
                         sentence_section_map.append(section)
 
 
-                unique=list(dict.fromkeys(zip(sentences,sentence_section_map)))
-                sentences,sentence_section_map=zip(*unique)
-
+                # remove duplicates
+                sentences = list(dict.fromkeys(sentences))
 
                 article_embeddings = model.encode(sentences)
 
@@ -250,8 +250,6 @@ if analyze:
 
                     best_sentence = sentences[best_index]
 
-                    best_section = sentence_section_map[best_index]
-
                     score = similarity_scores[0][best_index]
 
                     results.append({
@@ -259,7 +257,6 @@ if analyze:
                         "AI Sentence":ai_sentence,
                         "Domain":domain,
                         "Source URL":url,
-                        "Section":best_section,
                         "Similarity (%)":round(score*100,2),
                         "Matched Sentence":best_sentence
 
@@ -273,7 +270,6 @@ if analyze:
                     "AI Sentence":"Error",
                     "Domain":"-",
                     "Source URL":url,
-                    "Section":"Error",
                     "Similarity (%)":0,
                     "Matched Sentence":str(e)
 
@@ -300,6 +296,7 @@ if analyze:
             colC.metric("Matches",len(df))
 
             st.dataframe(df,width="stretch",height=450)
+
 
             st.divider()
             st.subheader("🧩 Highlighted Matches")
@@ -342,6 +339,7 @@ Similarity: {row['Similarity (%)']}%
             )
 
             st.bar_chart(summary.set_index("Domain"))
+
 
             st.download_button(
                 "📥 Download CSV",

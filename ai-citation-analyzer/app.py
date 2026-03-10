@@ -3,13 +3,15 @@ import requests
 import pandas as pd
 import re
 from bs4 import BeautifulSoup
-from sentence_transformers import SentenceTransformer
-from sklearn.metrics.pairwise import cosine_similarity
 from urllib.parse import urlparse
 
-# ---------------------------------------------------
+from sentence_transformers import SentenceTransformer, CrossEncoder
+from sklearn.metrics.pairwise import cosine_similarity
+
+
+# ------------------------------------------------
 # PAGE CONFIG
-# ---------------------------------------------------
+# ------------------------------------------------
 
 st.set_page_config(
     page_title="AI Citation Analyzer",
@@ -17,345 +19,182 @@ st.set_page_config(
     layout="wide"
 )
 
-# ---------------------------------------------------
-# STYLE
-# ---------------------------------------------------
-
-st.markdown("""
-<style>
-
-.block-container{padding-top:2rem;}
-
-.result-card{
-padding:22px;
-border-radius:12px;
-background:#ffffff;
-border:1px solid #e5e7eb;
-box-shadow:0 5px 16px rgba(0,0,0,0.06);
-margin-bottom:18px;
-}
-
-.card-title{font-weight:600;color:#111827;margin-bottom:5px;}
-.ai-text{color:#1f2937;}
-.source-text{color:#4b5563;}
-
-.similarity-badge{
-display:inline-block;
-margin-top:10px;
-padding:6px 12px;
-border-radius:8px;
-background:#eef2ff;
-color:#3730a3;
-font-weight:600;
-font-size:13px;
-}
-
-strong{color:#2563eb;}
-
-</style>
-""", unsafe_allow_html=True)
-
-# ---------------------------------------------------
-# HEADER
-# ---------------------------------------------------
-
 st.title("🔎 AI Citation Analyzer")
 
-st.markdown("""
-Identify which **web sources likely influenced an AI-generated answer**
-using **semantic + keyword similarity analysis**.
-""")
+st.write(
+"Find which source sentences are most similar to an AI generated answer."
+)
 
-st.divider()
+# ------------------------------------------------
+# MODELS
+# ------------------------------------------------
 
-# ---------------------------------------------------
+@st.cache_resource
+def load_models():
+
+    embed_model = SentenceTransformer("all-mpnet-base-v2")
+
+    reranker = CrossEncoder(
+        "cross-encoder/ms-marco-MiniLM-L-6-v2"
+    )
+
+    return embed_model, reranker
+
+
+embed_model, reranker = load_models()
+
+
+# ------------------------------------------------
 # INPUT
-# ---------------------------------------------------
+# ------------------------------------------------
 
 col1, col2 = st.columns(2)
 
 with col1:
     ai_answer = st.text_area(
-        "🧠 AI Answer",
-        height=220,
-        placeholder="Paste AI generated answer..."
+        "AI Answer",
+        height=220
     )
 
 with col2:
     source_urls = st.text_area(
-        "🌐 Source URLs (one per line)",
-        height=220,
-        placeholder="https://example.com/article"
+        "Source URLs (one per line)",
+        height=220
     )
 
-st.divider()
+analyze = st.button("Analyze")
 
-analyze = st.button("🚀 Analyze Sources", use_container_width=True)
 
-# ---------------------------------------------------
-# LOAD MODEL
-# ---------------------------------------------------
-
-@st.cache_resource
-def load_model():
-    return SentenceTransformer("all-mpnet-base-v2")
-
-model = load_model()
-
-# ---------------------------------------------------
-# SIMPLE CLAIM EXTRACTION
-# ---------------------------------------------------
-
-def extract_claim(sentence):
-    words = sentence.split()
-    if len(words) < 5:
-        return sentence
-    return " ".join(words[:8])  # simple heuristic
-
-# ---------------------------------------------------
-# KEYWORD OVERLAP
-# ---------------------------------------------------
-
-def keyword_overlap(a, b):
-
-    a_words = set(re.findall(r'\b[a-zA-Z]{4,}\b', a.lower()))
-    b_words = set(re.findall(r'\b[a-zA-Z]{4,}\b', b.lower()))
-
-    if not a_words:
-        return 0
-
-    overlap = a_words.intersection(b_words)
-
-    return len(overlap) / len(a_words)
-
-# ---------------------------------------------------
-# HIGHLIGHT
-# ---------------------------------------------------
-
-def highlight_overlap(ai_sentence, source_sentence):
-
-    ai_words = set(re.findall(r'\b[a-zA-Z]{4,}\b', ai_sentence.lower()))
-
-    highlighted = []
-
-    for word in source_sentence.split():
-
-        clean = re.sub(r'\W+', '', word.lower())
-
-        if clean in ai_words:
-            highlighted.append(f"<strong>{word}</strong>")
-        else:
-            highlighted.append(word)
-
-    return " ".join(highlighted)
-
-# ---------------------------------------------------
+# ------------------------------------------------
 # SCRAPER
-# ---------------------------------------------------
+# ------------------------------------------------
 
-def scrape_article(url):
+def scrape(url):
 
     headers = {
-        "User-Agent":"Mozilla/5.0",
-        "Accept":"text/html",
-        "Accept-Language":"en-US,en;q=0.9",
-        "Referer":"https://google.com"
+        "User-Agent": "Mozilla/5.0",
+        "Accept-Language": "en-US,en;q=0.9",
     }
 
     r = requests.get(url, headers=headers, timeout=15)
     r.raise_for_status()
 
-    soup = BeautifulSoup(r.text,"html.parser")
+    soup = BeautifulSoup(r.text, "html.parser")
 
     main = soup.find("article") or soup.find("main") or soup.body
 
     paragraphs = []
 
     for p in main.find_all("p"):
-        text = p.get_text().strip()
-        if len(text) > 80:
-            paragraphs.append(text)
+        t = p.get_text().strip()
+
+        if len(t) > 80:
+            paragraphs.append(t)
 
     return paragraphs
 
-# ---------------------------------------------------
+
+# ------------------------------------------------
+# SENTENCE SPLIT
+# ------------------------------------------------
+
+def split_sentences(text):
+
+    s = re.split(r'(?<=[.!?]) +', text)
+
+    return [x.strip() for x in s if len(x) > 40]
+
+
+# ------------------------------------------------
 # ANALYSIS
-# ---------------------------------------------------
+# ------------------------------------------------
 
 if analyze:
 
-    with st.spinner("Analyzing sources..."):
+    urls = source_urls.split("\n")
 
-        urls = source_urls.split("\n")
-        results = []
+    ai_sentences = split_sentences(ai_answer)
 
-        ai_sentences = re.split(r'(?<=[.!?]) +', ai_answer)
-        ai_sentences = [s.strip() for s in ai_sentences if len(s) > 40]
+    results = []
 
-        used_sources = set()
+    used_sources = set()
 
-        for url in urls:
+    for url in urls:
 
-            url = url.strip()
+        url = url.strip()
 
-            if not url:
+        if not url:
+            continue
+
+        try:
+
+            domain = urlparse(url).netloc
+
+            paragraphs = scrape(url)
+
+            sentences = []
+
+            for p in paragraphs:
+                sentences += split_sentences(p)
+
+            sentences = list(dict.fromkeys(sentences))
+
+            if not sentences:
                 continue
 
-            try:
+            embeddings = embed_model.encode(sentences)
 
-                domain = urlparse(url).netloc
+            for ai_sentence in ai_sentences:
 
-                paragraphs = scrape_article(url)
+                ai_embed = embed_model.encode([ai_sentence])
 
-                sentences = []
+                sim = cosine_similarity(ai_embed, embeddings)[0]
 
-                for para in paragraphs:
-                    split = re.split(r'(?<=[.!?]) +', para)
-                    clean = [s.strip() for s in split if len(s) > 40]
-                    sentences.extend(clean)
+                top_k = sim.argsort()[-10:][::-1]
 
-                sentences = list(dict.fromkeys(sentences))
+                candidates = [sentences[i] for i in top_k]
 
-                if not sentences:
+                pairs = [(ai_sentence, c) for c in candidates]
+
+                scores = reranker.predict(pairs)
+
+                best_index = scores.argmax()
+
+                best_sentence = candidates[best_index]
+
+                best_score = scores[best_index]
+
+                if best_sentence in used_sources:
                     continue
 
-                para_embeddings = model.encode(paragraphs)
-                sent_embeddings = model.encode(sentences)
+                if best_score > 0.3:
 
-                for ai_sentence in ai_sentences:
+                    used_sources.add(best_sentence)
 
-                    claim = extract_claim(ai_sentence)
+                    results.append({
+                        "AI Sentence": ai_sentence,
+                        "Matched Source": best_sentence,
+                        "Domain": domain,
+                        "Score": round(float(best_score), 3)
+                    })
 
-                    ai_emb = model.encode([claim])
+        except Exception as e:
 
-                    best_score = 0
-                    best_match = ""
+            results.append({
+                "AI Sentence": "Error",
+                "Matched Source": str(e),
+                "Domain": url,
+                "Score": 0
+            })
 
-                    # paragraph matching
+    if results:
 
-                    p_scores = cosine_similarity(ai_emb, para_embeddings)[0]
-                    top_p = p_scores.argsort()[-3:][::-1]
+        df = pd.DataFrame(results)
 
-                    for i in top_p:
+        st.dataframe(df, use_container_width=True)
 
-                        para = paragraphs[i]
-
-                        sem = p_scores[i]
-                        key = keyword_overlap(ai_sentence, para)
-
-                        score = (sem*0.7)+(key*0.3)
-
-                        if score > best_score:
-                            best_score = score
-                            best_match = para
-
-                    # sentence matching
-
-                    s_scores = cosine_similarity(ai_emb, sent_embeddings)[0]
-                    top_s = s_scores.argsort()[-5:][::-1]
-
-                    for i in top_s:
-
-                        sent = sentences[i]
-
-                        if sent in used_sources:
-                            continue
-
-                        sem = s_scores[i]
-                        key = keyword_overlap(ai_sentence, sent)
-
-                        score = (sem*0.7)+(key*0.3)
-
-                        if score > best_score:
-                            best_score = score
-                            best_match = sent
-
-                    if best_score > 0.45:
-
-                        used_sources.add(best_match)
-
-                        results.append({
-                            "AI Sentence": ai_sentence,
-                            "Domain": domain,
-                            "Source URL": url,
-                            "Similarity (%)": round(best_score*100,2),
-                            "Matched Sentence": best_match
-                        })
-
-            except Exception as e:
-
-                results.append({
-                    "AI Sentence":"Error",
-                    "Domain":"-",
-                    "Source URL":url,
-                    "Similarity (%)":0,
-                    "Matched Sentence":str(e)
-                })
-
-# ---------------------------------------------------
-# RESULTS
-# ---------------------------------------------------
-
-        if results:
-
-            df = pd.DataFrame(results)
-
-            df = df.sort_values(by="Similarity (%)", ascending=False)
-
-            st.divider()
-            st.subheader("📊 Citation Analysis Results")
-
-            colA,colB,colC = st.columns(3)
-
-            colA.metric("AI Sentences",len(ai_sentences))
-            colB.metric("Sources",len(urls))
-            colC.metric("Matches",len(df))
-
-            st.dataframe(df,width="stretch",height=450)
-
-            st.divider()
-            st.subheader("🧩 Highlighted Matches")
-
-            for _,row in df.head(10).iterrows():
-
-                highlighted = highlight_overlap(
-                    row["AI Sentence"],
-                    row["Matched Sentence"]
-                )
-
-                st.markdown(f"""
-<div class="result-card">
-
-<div class="card-title">AI Sentence</div>
-<div class="ai-text">{row['AI Sentence']}</div>
-
-<br>
-
-<div class="card-title">Matched Source</div>
-<div class="source-text">{highlighted}</div>
-
-<span class="similarity-badge">
-Similarity: {row['Similarity (%)']}%
-</span>
-
-</div>
-""", unsafe_allow_html=True)
-
-            st.divider()
-            st.subheader("🌍 Domain Influence")
-
-            summary = (
-                df.groupby("Domain")["Similarity (%)"]
-                .mean()
-                .sort_values(ascending=False)
-                .reset_index()
-            )
-
-            st.bar_chart(summary.set_index("Domain"))
-
-            st.download_button(
-                "📥 Download CSV",
-                df.to_csv(index=False),
-                "ai_citation_results.csv",
-                "text/csv"
-            )
+        st.download_button(
+            "Download CSV",
+            df.to_csv(index=False),
+            "results.csv"
+        )

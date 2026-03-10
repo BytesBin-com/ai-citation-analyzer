@@ -2,6 +2,7 @@ import streamlit as st
 import requests
 import pandas as pd
 import re
+import time
 from bs4 import BeautifulSoup
 from urllib.parse import urlparse
 from sentence_transformers import SentenceTransformer
@@ -9,22 +10,16 @@ from sklearn.metrics.pairwise import cosine_similarity
 
 
 # ---------------------------------------------------
-# PAGE CONFIG
+# PAGE
 # ---------------------------------------------------
 
-st.set_page_config(
-    page_title="AI Citation Tracker",
-    layout="wide"
-)
+st.set_page_config(page_title="AI Citation Tracker", layout="wide")
 
-st.title("AI Citation Tracker for SEO")
+st.title("AI Citation Tracker (SEO Tool)")
 
 st.write(
-"Paste an AI generated answer and page URLs. "
-"The tool identifies which **page sections (headers + sentences)** "
-"are most similar to the AI response."
+"Compare AI answers with webpage content and see which **headers and sentences** match."
 )
-
 
 # ---------------------------------------------------
 # MODEL
@@ -44,22 +39,32 @@ model = load_model()
 col1, col2 = st.columns(2)
 
 with col1:
-    ai_text = st.text_area(
-        "AI Answer",
-        height=260
-    )
+    ai_text = st.text_area("AI Answer", height=260)
 
 with col2:
-    urls_text = st.text_area(
-        "Source URLs (one per line)",
-        height=260
-    )
+    urls_text = st.text_area("Source URLs (one per line)", height=260)
 
 run = st.button("Analyze")
 
 
 # ---------------------------------------------------
-# TEXT SPLIT
+# SESSION (BROWSER-LIKE REQUESTS)
+# ---------------------------------------------------
+
+session = requests.Session()
+
+session.headers.update({
+    "User-Agent":
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/122.0 Safari/537.36",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Accept": "text/html",
+    "Connection": "keep-alive"
+})
+
+
+# ---------------------------------------------------
+# TEXT UTIL
 # ---------------------------------------------------
 
 def split_sentences(text):
@@ -70,7 +75,7 @@ def split_sentences(text):
 
 
 # ---------------------------------------------------
-# HIGHLIGHT WORD MATCHES
+# WORD HIGHLIGHT
 # ---------------------------------------------------
 
 def highlight(ai_sentence, source_sentence):
@@ -92,44 +97,52 @@ def highlight(ai_sentence, source_sentence):
 
 
 # ---------------------------------------------------
-# SCRAPE PAGE
+# SCRAPER
 # ---------------------------------------------------
 
 def scrape_page(url):
 
-    headers = {"User-Agent": "Mozilla/5.0"}
+    for attempt in range(3):
 
-    r = requests.get(url, headers=headers, timeout=15)
-    r.raise_for_status()
+        try:
 
-    soup = BeautifulSoup(r.text, "html.parser")
+            r = session.get(url, timeout=20)
 
-    main = soup.find("article") or soup.find("main") or soup.body
+            r.raise_for_status()
 
-    current_header = "Introduction"
+            soup = BeautifulSoup(r.text, "html.parser")
 
-    sections = []
+            main = soup.find("article") or soup.find("main") or soup.body
 
-    for tag in main.find_all(["h1","h2","h3","p"]):
+            current_header = "Introduction"
 
-        if tag.name in ["h1","h2","h3"]:
+            sections = []
 
-            current_header = tag.get_text().strip()
+            for tag in main.find_all(["h1","h2","h3","p"]):
 
-        if tag.name == "p":
+                if tag.name in ["h1","h2","h3"]:
+                    current_header = tag.get_text().strip()
 
-            paragraph = tag.get_text().strip()
+                if tag.name == "p":
 
-            sentences = split_sentences(paragraph)
+                    paragraph = tag.get_text().strip()
 
-            for s in sentences:
+                    sentences = split_sentences(paragraph)
 
-                sections.append({
-                    "header": current_header,
-                    "sentence": s
-                })
+                    for s in sentences:
 
-    return sections
+                        sections.append({
+                            "header": current_header,
+                            "sentence": s
+                        })
+
+            return sections
+
+        except Exception:
+
+            time.sleep(2)
+
+    raise Exception("Connection blocked or page not accessible")
 
 
 # ---------------------------------------------------
@@ -176,16 +189,11 @@ if run:
                     results.append({
 
                         "AI Sentence": ai_sentence,
-
                         "Domain": domain,
-
                         "URL": url,
-
                         "Header": sections[best_index]["header"],
-
                         "Matched Sentence": sections[best_index]["sentence"],
-
-                        "Similarity (%)": round(best_score*100,2)
+                        "Similarity (%)": round(best_score * 100, 2)
 
                     })
 
@@ -194,15 +202,10 @@ if run:
             results.append({
 
                 "AI Sentence": "Error",
-
                 "Domain": "-",
-
                 "URL": url,
-
                 "Header": "-",
-
                 "Matched Sentence": str(e),
-
                 "Similarity (%)": 0
 
             })

@@ -4,77 +4,95 @@ import pandas as pd
 import re
 from bs4 import BeautifulSoup
 from urllib.parse import urlparse
-
-from sentence_transformers import SentenceTransformer, CrossEncoder
+from sentence_transformers import SentenceTransformer
 from sklearn.metrics.pairwise import cosine_similarity
 
 
-# ------------------------------------------------
+# ---------------------------------------------------
 # PAGE CONFIG
-# ------------------------------------------------
+# ---------------------------------------------------
 
 st.set_page_config(
-    page_title="AI Citation Analyzer",
+    page_title="AI Citation Tracker",
     page_icon="🔎",
     layout="wide"
 )
 
-st.title("🔎 AI Citation Analyzer")
+st.title("🔎 AI Citation Tracker (SEO Analysis Tool)")
 
 st.write(
-"Find which source sentences are most similar to an AI generated answer."
+"""
+Paste an **AI generated answer** and **source URLs**.
+
+The tool identifies which **sections of those pages (headers + paragraphs)** 
+are most similar to the AI answer so SEO teams can understand 
+what type of content AI systems surface.
+"""
 )
 
-# ------------------------------------------------
-# MODELS
-# ------------------------------------------------
+# ---------------------------------------------------
+# LOAD MODEL
+# ---------------------------------------------------
 
 @st.cache_resource
-def load_models():
+def load_model():
+    return SentenceTransformer("all-MiniLM-L6-v2")
 
-    embed_model = SentenceTransformer("all-mpnet-base-v2")
-
-    reranker = CrossEncoder(
-        "cross-encoder/ms-marco-MiniLM-L-6-v2"
-    )
-
-    return embed_model, reranker
+model = load_model()
 
 
-embed_model, reranker = load_models()
-
-
-# ------------------------------------------------
+# ---------------------------------------------------
 # INPUT
-# ------------------------------------------------
+# ---------------------------------------------------
 
 col1, col2 = st.columns(2)
 
 with col1:
-    ai_answer = st.text_area(
+    ai_text = st.text_area(
         "AI Answer",
-        height=220
+        height=260,
+        placeholder="Paste AI generated answer..."
     )
 
 with col2:
-    source_urls = st.text_area(
+    urls_text = st.text_area(
         "Source URLs (one per line)",
-        height=220
+        height=260,
+        placeholder="https://example.com/article"
     )
 
-analyze = st.button("Analyze")
+run = st.button("Analyze")
 
 
-# ------------------------------------------------
-# SCRAPER
-# ------------------------------------------------
+# ---------------------------------------------------
+# WORD HIGHLIGHT
+# ---------------------------------------------------
 
-def scrape(url):
+def highlight_overlap(ai_sentence, paragraph):
 
-    headers = {
-        "User-Agent": "Mozilla/5.0",
-        "Accept-Language": "en-US,en;q=0.9",
-    }
+    ai_words = set(re.findall(r'\b[a-zA-Z]{4,}\b', ai_sentence.lower()))
+
+    highlighted = []
+
+    for word in paragraph.split():
+
+        clean = re.sub(r'\W+', '', word.lower())
+
+        if clean in ai_words:
+            highlighted.append(f"<strong>{word}</strong>")
+        else:
+            highlighted.append(word)
+
+    return " ".join(highlighted)
+
+
+# ---------------------------------------------------
+# SCRAPE PAGE SECTIONS
+# ---------------------------------------------------
+
+def scrape_page(url):
+
+    headers = {"User-Agent": "Mozilla/5.0"}
 
     r = requests.get(url, headers=headers, timeout=15)
     r.raise_for_status()
@@ -83,41 +101,53 @@ def scrape(url):
 
     main = soup.find("article") or soup.find("main") or soup.body
 
-    paragraphs = []
+    sections = []
 
-    for p in main.find_all("p"):
-        t = p.get_text().strip()
+    current_header = "Introduction"
 
-        if len(t) > 80:
-            paragraphs.append(t)
+    for tag in main.find_all(["h1", "h2", "h3", "p"]):
 
-    return paragraphs
+        if tag.name in ["h1", "h2", "h3"]:
+            current_header = tag.get_text().strip()
+
+        if tag.name == "p":
+
+            text = tag.get_text().strip()
+
+            if len(text) > 60:
+
+                sections.append({
+                    "header": current_header,
+                    "paragraph": text
+                })
+
+    return sections
 
 
-# ------------------------------------------------
-# SENTENCE SPLIT
-# ------------------------------------------------
+# ---------------------------------------------------
+# SPLIT AI TEXT INTO SENTENCES
+# ---------------------------------------------------
 
 def split_sentences(text):
 
-    s = re.split(r'(?<=[.!?]) +', text)
+    sentences = re.split(r'(?<=[.!?]) +', text)
 
-    return [x.strip() for x in s if len(x) > 40]
+    sentences = [s.strip() for s in sentences if len(s) > 30]
+
+    return sentences
 
 
-# ------------------------------------------------
+# ---------------------------------------------------
 # ANALYSIS
-# ------------------------------------------------
+# ---------------------------------------------------
 
-if analyze:
+if run:
 
-    urls = source_urls.split("\n")
+    urls = urls_text.split("\n")
 
-    ai_sentences = split_sentences(ai_answer)
+    ai_sentences = split_sentences(ai_text)
 
     results = []
-
-    used_sources = set()
 
     for url in urls:
 
@@ -130,71 +160,109 @@ if analyze:
 
             domain = urlparse(url).netloc
 
-            paragraphs = scrape(url)
+            sections = scrape_page(url)
 
-            sentences = []
+            paragraphs = [s["paragraph"] for s in sections]
 
-            for p in paragraphs:
-                sentences += split_sentences(p)
-
-            sentences = list(dict.fromkeys(sentences))
-
-            if not sentences:
+            if not paragraphs:
                 continue
 
-            embeddings = embed_model.encode(sentences)
+            para_embeddings = model.encode(paragraphs)
 
             for ai_sentence in ai_sentences:
 
-                ai_embed = embed_model.encode([ai_sentence])
+                ai_embedding = model.encode([ai_sentence])
 
-                sim = cosine_similarity(ai_embed, embeddings)[0]
+                similarity_scores = cosine_similarity(
+                    ai_embedding,
+                    para_embeddings
+                )[0]
 
-                top_k = sim.argsort()[-10:][::-1]
+                top_matches = similarity_scores.argsort()[-3:][::-1]
 
-                candidates = [sentences[i] for i in top_k]
+                for idx in top_matches:
 
-                pairs = [(ai_sentence, c) for c in candidates]
+                    score = similarity_scores[idx]
 
-                scores = reranker.predict(pairs)
-
-                best_index = scores.argmax()
-
-                best_sentence = candidates[best_index]
-
-                best_score = scores[best_index]
-
-                if best_sentence in used_sources:
-                    continue
-
-                if best_score > 0.3:
-
-                    used_sources.add(best_sentence)
+                    if score < 0.45:
+                        continue
 
                     results.append({
+
                         "AI Sentence": ai_sentence,
-                        "Matched Source": best_sentence,
                         "Domain": domain,
-                        "Score": round(float(best_score), 3)
+                        "URL": url,
+                        "Header": sections[idx]["header"],
+                        "Paragraph": sections[idx]["paragraph"],
+                        "Similarity (%)": round(score * 100, 2)
+
                     })
 
         except Exception as e:
 
             results.append({
+
                 "AI Sentence": "Error",
-                "Matched Source": str(e),
-                "Domain": url,
-                "Score": 0
+                "Domain": "-",
+                "URL": url,
+                "Header": "-",
+                "Paragraph": str(e),
+                "Similarity (%)": 0
+
             })
+
+
+# ---------------------------------------------------
+# RESULTS TABLE
+# ---------------------------------------------------
 
     if results:
 
         df = pd.DataFrame(results)
+
+        df = df.sort_values(by="Similarity (%)", ascending=False)
+
+        st.subheader("📊 Citation Matches")
 
         st.dataframe(df, use_container_width=True)
 
         st.download_button(
             "Download CSV",
             df.to_csv(index=False),
-            "results.csv"
+            "ai_citation_matches.csv"
         )
+
+
+# ---------------------------------------------------
+# DETAILED MATCH VIEW
+# ---------------------------------------------------
+
+        st.subheader("🔎 Match Details")
+
+        for _, row in df.head(10).iterrows():
+
+            highlighted = highlight_overlap(
+                row["AI Sentence"],
+                row["Paragraph"]
+            )
+
+            st.markdown(f"""
+**AI Sentence**
+
+{row['AI Sentence']}
+
+**Matched Header**
+
+{row['Header']}
+
+**Matched Paragraph**
+
+{highlighted}
+
+**Similarity:** {row['Similarity (%)']}%
+---
+""", unsafe_allow_html=True)
+
+    else:
+
+        st.warning("No strong matches detected.")

@@ -29,18 +29,52 @@ st.markdown(
     padding-top: 2rem;
 }
 
+/* Metrics box */
 .metric-box {
     padding:20px;
-    border-radius:10px;
+    border-radius:12px;
     background:#f6f7fb;
 }
 
+/* Result cards */
 .result-card{
-    padding:20px;
-    border-radius:10px;
-    background:#ffffff;
-    box-shadow:0 4px 10px rgba(0,0,0,0.05);
-    margin-bottom:15px;
+    padding:22px;
+    border-radius:12px;
+    background:#f8f9fc;
+    border:1px solid #e6e8ef;
+    box-shadow:0 4px 12px rgba(0,0,0,0.04);
+    margin-bottom:20px;
+    color:#374151;
+    font-size:15px;
+    line-height:1.6;
+}
+
+/* Headings inside cards */
+.result-card b{
+    color:#111827;
+}
+
+/* AI sentence */
+.ai-text{
+    font-weight:500;
+    color:#1f2937;
+}
+
+/* Matched source */
+.source-text{
+    color:#4b5563;
+}
+
+/* Similarity badge */
+.similarity-badge{
+    display:inline-block;
+    margin-top:8px;
+    padding:6px 10px;
+    border-radius:6px;
+    background:#eef2ff;
+    color:#3730a3;
+    font-weight:600;
+    font-size:13px;
 }
 
 </style>

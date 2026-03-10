@@ -16,8 +16,14 @@ st.write(
 ai_answer = st.text_area("Paste AI Answer")
 source_urls = st.text_area("Paste Source URLs (one per line)")
 
-# Load semantic model
-model = SentenceTransformer("all-MiniLM-L6-v2")
+
+# Load model only once
+@st.cache_resource
+def load_model():
+    return SentenceTransformer("all-MiniLM-L6-v2")
+
+
+model = load_model()
 
 
 def highlight_overlap(ai_sentence, source_sentence):
@@ -61,9 +67,7 @@ if st.button("Analyze"):
             domain = urlparse(url).netloc
 
             response = session.get(url, timeout=15)
-
-            if response.status_code != 200:
-                raise Exception(f"HTTP {response.status_code}")
+            response.raise_for_status()
 
             soup = BeautifulSoup(response.text, "html.parser")
 
@@ -103,26 +107,26 @@ if st.button("Analyze"):
                     sentence_section_map.append(section)
 
                 for i in range(len(clean) - 1):
-                    sentences.append(clean[i] + " " + clean[i+1])
+                    sentences.append(clean[i] + " " + clean[i + 1])
                     sentence_section_map.append(section)
 
                 for i in range(len(clean) - 2):
-                    sentences.append(clean[i] + " " + clean[i+1] + " " + clean[i+2])
+                    sentences.append(clean[i] + " " + clean[i + 1] + " " + clean[i + 2])
                     sentence_section_map.append(section)
 
-            # Remove duplicates
             unique = list(dict.fromkeys(zip(sentences, sentence_section_map)))
             sentences, sentence_section_map = zip(*unique)
 
+            # Encode article sentences once
+            article_embeddings = model.encode(sentences)
+
             for ai_sentence in ai_sentences:
 
-                texts = [ai_sentence] + list(sentences)
-
-                embeddings = model.encode(texts)
+                ai_embedding = model.encode([ai_sentence])
 
                 similarity_scores = cosine_similarity(
-                    [embeddings[0]],
-                    embeddings[1:]
+                    ai_embedding,
+                    article_embeddings
                 )
 
                 best_index = similarity_scores.argmax()
@@ -173,7 +177,7 @@ if st.button("Analyze"):
 
         st.dataframe(
             df,
-            use_container_width=True,
+            width="stretch",
             height=600
         )
 
@@ -199,7 +203,7 @@ if st.button("Analyze"):
             .reset_index()
         )
 
-        st.dataframe(summary, use_container_width=True)
+        st.dataframe(summary, width="stretch")
 
         st.download_button(
             "Download Results CSV",

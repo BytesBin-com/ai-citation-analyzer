@@ -18,53 +18,39 @@ st.set_page_config(
 )
 
 # ---------------------------------------------------
-# UI STYLE
+# STYLE
 # ---------------------------------------------------
 
 st.markdown("""
 <style>
 
-.block-container{
-    padding-top:2rem;
-}
+.block-container{padding-top:2rem;}
 
 .result-card{
-    padding:22px;
-    border-radius:12px;
-    background:#ffffff;
-    border:1px solid #e5e7eb;
-    box-shadow:0 5px 16px rgba(0,0,0,0.06);
-    margin-bottom:18px;
+padding:22px;
+border-radius:12px;
+background:#ffffff;
+border:1px solid #e5e7eb;
+box-shadow:0 5px 16px rgba(0,0,0,0.06);
+margin-bottom:18px;
 }
 
-.card-title{
-    font-weight:600;
-    color:#111827;
-    margin-bottom:5px;
-}
-
-.ai-text{
-    color:#1f2937;
-}
-
-.source-text{
-    color:#4b5563;
-}
+.card-title{font-weight:600;color:#111827;margin-bottom:5px;}
+.ai-text{color:#1f2937;}
+.source-text{color:#4b5563;}
 
 .similarity-badge{
-    display:inline-block;
-    margin-top:10px;
-    padding:6px 12px;
-    border-radius:8px;
-    background:#eef2ff;
-    color:#3730a3;
-    font-weight:600;
-    font-size:13px;
+display:inline-block;
+margin-top:10px;
+padding:6px 12px;
+border-radius:8px;
+background:#eef2ff;
+color:#3730a3;
+font-weight:600;
+font-size:13px;
 }
 
-strong{
-    color:#2563eb;
-}
+strong{color:#2563eb;}
 
 </style>
 """, unsafe_allow_html=True)
@@ -75,11 +61,10 @@ strong{
 
 st.title("🔎 AI Citation Analyzer")
 
-st.markdown(
-"""
-Identify which **web sources likely influenced an AI-generated answer** using **semantic similarity analysis**.
-"""
-)
+st.markdown("""
+Identify which **web sources likely influenced an AI-generated answer**
+using **semantic + keyword similarity analysis**.
+""")
 
 st.divider()
 
@@ -90,7 +75,6 @@ st.divider()
 col1, col2 = st.columns(2)
 
 with col1:
-
     ai_answer = st.text_area(
         "🧠 AI Answer",
         height=220,
@@ -98,7 +82,6 @@ with col1:
     )
 
 with col2:
-
     source_urls = st.text_area(
         "🌐 Source URLs (one per line)",
         height=220,
@@ -120,10 +103,20 @@ def load_model():
 model = load_model()
 
 # ---------------------------------------------------
+# SIMPLE CLAIM EXTRACTION
+# ---------------------------------------------------
+
+def extract_claim(sentence):
+    words = sentence.split()
+    if len(words) < 5:
+        return sentence
+    return " ".join(words[:8])  # simple heuristic
+
+# ---------------------------------------------------
 # KEYWORD OVERLAP
 # ---------------------------------------------------
 
-def keyword_overlap_score(a, b):
+def keyword_overlap(a, b):
 
     a_words = set(re.findall(r'\b[a-zA-Z]{4,}\b', a.lower()))
     b_words = set(re.findall(r'\b[a-zA-Z]{4,}\b', b.lower()))
@@ -169,19 +162,17 @@ def scrape_article(url):
         "Referer":"https://google.com"
     }
 
-    response = requests.get(url,headers=headers,timeout=15)
-    response.raise_for_status()
+    r = requests.get(url, headers=headers, timeout=15)
+    r.raise_for_status()
 
-    soup = BeautifulSoup(response.text,"html.parser")
+    soup = BeautifulSoup(r.text,"html.parser")
 
     main = soup.find("article") or soup.find("main") or soup.body
 
     paragraphs = []
 
     for p in main.find_all("p"):
-
         text = p.get_text().strip()
-
         if len(text) > 80:
             paragraphs.append(text)
 
@@ -201,7 +192,7 @@ if analyze:
         ai_sentences = re.split(r'(?<=[.!?]) +', ai_answer)
         ai_sentences = [s.strip() for s in ai_sentences if len(s) > 40]
 
-        used_sentences = set()
+        used_sources = set()
 
         for url in urls:
 
@@ -219,11 +210,8 @@ if analyze:
                 sentences = []
 
                 for para in paragraphs:
-
                     split = re.split(r'(?<=[.!?]) +', para)
-
                     clean = [s.strip() for s in split if len(s) > 40]
-
                     sentences.extend(clean)
 
                 sentences = list(dict.fromkeys(sentences))
@@ -231,83 +219,77 @@ if analyze:
                 if not sentences:
                     continue
 
-                paragraph_embeddings = model.encode(paragraphs)
-                sentence_embeddings = model.encode(sentences)
+                para_embeddings = model.encode(paragraphs)
+                sent_embeddings = model.encode(sentences)
 
                 for ai_sentence in ai_sentences:
 
-                    ai_embedding = model.encode([ai_sentence])
+                    claim = extract_claim(ai_sentence)
+
+                    ai_emb = model.encode([claim])
 
                     best_score = 0
-                    best_text = ""
+                    best_match = ""
 
-                    # ---------- paragraph matching ----------
+                    # paragraph matching
 
-                    p_sim = cosine_similarity(ai_embedding,paragraph_embeddings)[0]
+                    p_scores = cosine_similarity(ai_emb, para_embeddings)[0]
+                    top_p = p_scores.argsort()[-3:][::-1]
 
-                    top_para = p_sim.argsort()[-3:][::-1]
-
-                    for i in top_para:
+                    for i in top_p:
 
                         para = paragraphs[i]
 
-                        semantic = p_sim[i]
+                        sem = p_scores[i]
+                        key = keyword_overlap(ai_sentence, para)
 
-                        keyword = keyword_overlap_score(ai_sentence,para)
-
-                        score = (semantic*0.7)+(keyword*0.3)
+                        score = (sem*0.7)+(key*0.3)
 
                         if score > best_score:
                             best_score = score
-                            best_text = para
+                            best_match = para
 
-                    # ---------- sentence matching ----------
+                    # sentence matching
 
-                    s_sim = cosine_similarity(ai_embedding,sentence_embeddings)[0]
+                    s_scores = cosine_similarity(ai_emb, sent_embeddings)[0]
+                    top_s = s_scores.argsort()[-5:][::-1]
 
-                    top_sent = s_sim.argsort()[-5:][::-1]
-
-                    for i in top_sent:
+                    for i in top_s:
 
                         sent = sentences[i]
 
-                        if sent in used_sentences:
+                        if sent in used_sources:
                             continue
 
-                        semantic = s_sim[i]
+                        sem = s_scores[i]
+                        key = keyword_overlap(ai_sentence, sent)
 
-                        keyword = keyword_overlap_score(ai_sentence,sent)
-
-                        score = (semantic*0.7)+(keyword*0.3)
+                        score = (sem*0.7)+(key*0.3)
 
                         if score > best_score:
                             best_score = score
-                            best_text = sent
+                            best_match = sent
 
                     if best_score > 0.45:
 
-                        used_sentences.add(best_text)
+                        used_sources.add(best_match)
 
                         results.append({
-
-                            "AI Sentence":ai_sentence,
-                            "Domain":domain,
-                            "Source URL":url,
-                            "Similarity (%)":round(best_score*100,2),
-                            "Matched Sentence":best_text
-
+                            "AI Sentence": ai_sentence,
+                            "Domain": domain,
+                            "Source URL": url,
+                            "Similarity (%)": round(best_score*100,2),
+                            "Matched Sentence": best_match
                         })
 
             except Exception as e:
 
                 results.append({
-
                     "AI Sentence":"Error",
                     "Domain":"-",
                     "Source URL":url,
                     "Similarity (%)":0,
                     "Matched Sentence":str(e)
-
                 })
 
 # ---------------------------------------------------
@@ -318,7 +300,7 @@ if analyze:
 
             df = pd.DataFrame(results)
 
-            df = df.sort_values(by="Similarity (%)",ascending=False)
+            df = df.sort_values(by="Similarity (%)", ascending=False)
 
             st.divider()
             st.subheader("📊 Citation Analysis Results")
@@ -357,7 +339,7 @@ Similarity: {row['Similarity (%)']}%
 </span>
 
 </div>
-""",unsafe_allow_html=True)
+""", unsafe_allow_html=True)
 
             st.divider()
             st.subheader("🌍 Domain Influence")

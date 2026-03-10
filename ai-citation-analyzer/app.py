@@ -7,24 +7,102 @@ from sentence_transformers import SentenceTransformer
 from sklearn.metrics.pairwise import cosine_similarity
 from urllib.parse import urlparse
 
-st.title("AI Citation Analyzer")
+# ---------------------------------------------------
+# PAGE CONFIG
+# ---------------------------------------------------
 
-st.write(
-    "Paste an AI answer and source URLs to detect which section and sentence AI likely used."
+st.set_page_config(
+    page_title="AI Citation Analyzer",
+    page_icon="🔎",
+    layout="wide"
 )
 
-ai_answer = st.text_area("Paste AI Answer")
-source_urls = st.text_area("Paste Source URLs (one per line)")
+# ---------------------------------------------------
+# STYLE
+# ---------------------------------------------------
 
+st.markdown(
+"""
+<style>
 
-# Load model only once
+.block-container {
+    padding-top: 2rem;
+}
+
+.metric-box {
+    padding:20px;
+    border-radius:10px;
+    background:#f6f7fb;
+}
+
+.result-card{
+    padding:20px;
+    border-radius:10px;
+    background:#ffffff;
+    box-shadow:0 4px 10px rgba(0,0,0,0.05);
+    margin-bottom:15px;
+}
+
+</style>
+""",
+unsafe_allow_html=True
+)
+
+# ---------------------------------------------------
+# HEADER
+# ---------------------------------------------------
+
+st.title("🔎 AI Citation Analyzer")
+
+st.markdown(
+"""
+Detect which **sentences and sources** influenced an AI-generated answer.
+
+Paste an AI answer and source URLs to analyze **semantic similarity and attribution**.
+"""
+)
+
+st.divider()
+
+# ---------------------------------------------------
+# INPUT AREA
+# ---------------------------------------------------
+
+col1, col2 = st.columns(2)
+
+with col1:
+
+    ai_answer = st.text_area(
+        "🧠 AI Answer",
+        height=220,
+        placeholder="Paste the AI-generated answer here..."
+    )
+
+with col2:
+
+    source_urls = st.text_area(
+        "🌐 Source URLs (one per line)",
+        height=220,
+        placeholder="https://example.com/article"
+    )
+
+st.divider()
+
+analyze = st.button("🚀 Analyze Sources", use_container_width=True)
+
+# ---------------------------------------------------
+# LOAD MODEL (CACHED)
+# ---------------------------------------------------
+
 @st.cache_resource
 def load_model():
     return SentenceTransformer("all-MiniLM-L6-v2")
 
-
 model = load_model()
 
+# ---------------------------------------------------
+# HIGHLIGHT FUNCTION
+# ---------------------------------------------------
 
 def highlight_overlap(ai_sentence, source_sentence):
 
@@ -43,171 +121,189 @@ def highlight_overlap(ai_sentence, source_sentence):
 
     return " ".join(highlighted)
 
+# ---------------------------------------------------
+# ANALYSIS
+# ---------------------------------------------------
 
-if st.button("Analyze"):
+if analyze:
 
-    urls = source_urls.split("\n")
-    results = []
+    with st.spinner("Analyzing sources..."):
 
-    ai_sentences = re.split(r'(?<=[.!?]) +', ai_answer)
-    ai_sentences = [s.strip() for s in ai_sentences if len(s) > 20]
+        urls = source_urls.split("\n")
+        results = []
 
-    session = requests.Session()
-    session.headers.update({"User-Agent": "Mozilla/5.0"})
+        ai_sentences = re.split(r'(?<=[.!?]) +', ai_answer)
+        ai_sentences = [s.strip() for s in ai_sentences if len(s) > 20]
 
-    for url in urls:
+        session = requests.Session()
+        session.headers.update({"User-Agent": "Mozilla/5.0"})
 
-        url = url.strip()
+        for url in urls:
 
-        if not url:
-            continue
+            url = url.strip()
 
-        try:
+            if not url:
+                continue
 
-            domain = urlparse(url).netloc
+            try:
 
-            response = session.get(url, timeout=15)
-            response.raise_for_status()
+                domain = urlparse(url).netloc
 
-            soup = BeautifulSoup(response.text, "html.parser")
+                response = session.get(url, timeout=15)
+                response.raise_for_status()
 
-            main = soup.find("article") or soup.find("main") or soup.body
+                soup = BeautifulSoup(response.text, "html.parser")
 
-            content = main.find_all(["h1", "h2", "h3", "p"])
+                main = soup.find("article") or soup.find("main") or soup.body
 
-            paragraphs = []
-            section_map = []
+                content = main.find_all(["h1","h2","h3","p"])
 
-            current_section = "Introduction"
+                paragraphs = []
+                section_map = []
 
-            for tag in content:
+                current_section = "Introduction"
 
-                if tag.name in ["h1", "h2", "h3"]:
-                    current_section = tag.get_text().strip()
+                for tag in content:
 
-                if tag.name == "p":
+                    if tag.name in ["h1","h2","h3"]:
+                        current_section = tag.get_text().strip()
 
-                    text = tag.get_text().strip()
+                    if tag.name == "p":
 
-                    if text:
-                        paragraphs.append(text)
-                        section_map.append(current_section)
+                        text = tag.get_text().strip()
 
-            sentences = []
-            sentence_section_map = []
+                        if text:
+                            paragraphs.append(text)
+                            section_map.append(current_section)
 
-            for paragraph, section in zip(paragraphs, section_map):
+                sentences = []
+                sentence_section_map = []
 
-                split_sentences = re.split(r'(?<=[.!?]) +', paragraph)
+                for paragraph, section in zip(paragraphs, section_map):
 
-                clean = [s.strip() for s in split_sentences if len(s) > 20]
+                    split_sentences = re.split(r'(?<=[.!?]) +', paragraph)
 
-                for s in clean:
-                    sentences.append(s)
-                    sentence_section_map.append(section)
+                    clean = [s.strip() for s in split_sentences if len(s) > 20]
 
-                for i in range(len(clean) - 1):
-                    sentences.append(clean[i] + " " + clean[i + 1])
-                    sentence_section_map.append(section)
+                    for s in clean:
+                        sentences.append(s)
+                        sentence_section_map.append(section)
 
-                for i in range(len(clean) - 2):
-                    sentences.append(clean[i] + " " + clean[i + 1] + " " + clean[i + 2])
-                    sentence_section_map.append(section)
+                    for i in range(len(clean)-1):
+                        sentences.append(clean[i]+" "+clean[i+1])
+                        sentence_section_map.append(section)
 
-            unique = list(dict.fromkeys(zip(sentences, sentence_section_map)))
-            sentences, sentence_section_map = zip(*unique)
+                unique = list(dict.fromkeys(zip(sentences,sentence_section_map)))
+                sentences, sentence_section_map = zip(*unique)
 
-            # Encode article sentences once
-            article_embeddings = model.encode(sentences)
+                article_embeddings = model.encode(sentences)
 
-            for ai_sentence in ai_sentences:
+                for ai_sentence in ai_sentences:
 
-                ai_embedding = model.encode([ai_sentence])
+                    ai_embedding = model.encode([ai_sentence])
 
-                similarity_scores = cosine_similarity(
-                    ai_embedding,
-                    article_embeddings
-                )
+                    similarity_scores = cosine_similarity(
+                        ai_embedding,
+                        article_embeddings
+                    )
 
-                best_index = similarity_scores.argmax()
+                    best_index = similarity_scores.argmax()
 
-                best_sentence = sentences[best_index]
-                best_section = sentence_section_map[best_index]
+                    best_sentence = sentences[best_index]
+                    best_section = sentence_section_map[best_index]
 
-                score = similarity_scores[0][best_index]
+                    score = similarity_scores[0][best_index]
 
-                if score >= 0.7:
-                    confidence = "High"
-                elif score >= 0.5:
-                    confidence = "Medium"
-                elif score >= 0.3:
-                    confidence = "Low"
-                else:
-                    confidence = "Very Low"
+                    results.append({
+                        "AI Sentence": ai_sentence,
+                        "Domain": domain,
+                        "Source URL": url,
+                        "Section": best_section,
+                        "Similarity (%)": round(score*100,2),
+                        "Matched Sentence": best_sentence
+                    })
+
+            except Exception as e:
 
                 results.append({
-                    "AI Sentence": ai_sentence,
-                    "Domain": domain,
-                    "Source URL": url,
-                    "Section": best_section,
-                    "Similarity (%)": round(score * 100, 2),
-                    "Confidence": confidence,
-                    "Matched Sentence": best_sentence
+                    "AI Sentence":"Error",
+                    "Domain":"-",
+                    "Source URL":url,
+                    "Section":"Error",
+                    "Similarity (%)":0,
+                    "Matched Sentence":str(e)
                 })
 
-        except Exception as e:
+# ---------------------------------------------------
+# RESULTS
+# ---------------------------------------------------
 
-            results.append({
-                "AI Sentence": "Error",
-                "Domain": "-",
-                "Source URL": url,
-                "Section": "Error",
-                "Similarity (%)": 0,
-                "Confidence": "Error",
-                "Matched Sentence": str(e)
-            })
+        if results:
 
-    if results:
+            df = pd.DataFrame(results)
 
-        df = pd.DataFrame(results)
+            df = df.sort_values(by="Similarity (%)",ascending=False)
 
-        df = df.sort_values(by="Similarity (%)", ascending=False)
+            st.divider()
+            st.subheader("📊 Citation Analysis Results")
 
-        st.subheader("Citation Analysis Results")
+            colA, colB, colC = st.columns(3)
 
-        st.dataframe(
-            df,
-            width="stretch",
-            height=600
-        )
+            with colA:
+                st.metric("AI Sentences", len(ai_sentences))
 
-        st.subheader("Highlighted Matches")
+            with colB:
+                st.metric("Sources Analyzed", len(urls))
 
-        for _, row in df.iterrows():
+            with colC:
+                st.metric("Matches Found", len(df))
 
-            highlighted = highlight_overlap(
-                row["AI Sentence"],
-                row["Matched Sentence"]
+            st.dataframe(df,width="stretch",height=450)
+
+            st.divider()
+
+            st.subheader("🧩 Highlighted Matches")
+
+            for _,row in df.head(10).iterrows():
+
+                highlighted = highlight_overlap(
+                    row["AI Sentence"],
+                    row["Matched Sentence"]
+                )
+
+                st.markdown(
+                f"""
+                <div class="result-card">
+
+                <b>AI Sentence</b><br>
+                {row['AI Sentence']}<br><br>
+
+                <b>Matched Source</b><br>
+                {highlighted}<br><br>
+
+                <b>Similarity:</b> {row['Similarity (%)']}%
+
+                </div>
+                """,
+                unsafe_allow_html=True
+                )
+
+            st.divider()
+
+            st.subheader("🌍 Domain Influence")
+
+            summary = (
+                df.groupby("Domain")["Similarity (%)"]
+                .mean()
+                .sort_values(ascending=False)
+                .reset_index()
             )
 
-            st.markdown(f"**AI Sentence:** {row['AI Sentence']}")
-            st.markdown(f"**Matched Sentence:** {highlighted}")
-            st.write("---")
+            st.bar_chart(summary.set_index("Domain"))
 
-        st.subheader("Domain Influence Summary")
-
-        summary = (
-            df.groupby("Domain")["Similarity (%)"]
-            .mean()
-            .sort_values(ascending=False)
-            .reset_index()
-        )
-
-        st.dataframe(summary, width="stretch")
-
-        st.download_button(
-            "Download Results CSV",
-            df.to_csv(index=False),
-            "ai_citation_results.csv",
-            "text/csv"
-        )
+            st.download_button(
+                "📥 Download CSV",
+                df.to_csv(index=False),
+                "ai_citation_results.csv",
+                "text/csv"
+            )
